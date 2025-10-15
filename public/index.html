@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Email Verifier & Sorter + Login Finder</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #f4f4f4; margin: 0; padding: 20px; }
+    h1 { text-align: center; }
+    #inputArea { width: 100%; height: 150px; margin-bottom: 15px; padding: 10px; }
+    button { padding: 6px 12px; cursor: pointer; border-radius: 4px; border: none; background: #0073e6; color: white; }
+    button:hover { background: #005bb5; }
+    #total { font-weight: bold; margin: 15px 0; font-size: 18px; text-align: center; }
+    table { width: 100%; border-collapse: collapse; background: white; box-shadow: 0 1px 3px rgba(0,0,0,0.2); border-radius: 6px; overflow: hidden; }
+    th, td { padding: 10px; border-bottom: 1px solid #ddd; text-align: center; }
+    th { background: #0073e6; color: white; font-size: 16px; }
+    tr:hover { background: #f1f1f1; }
+    #searchResult a { display: block; margin: 6px 0; color: #0073e6; text-decoration: none; }
+    #searchResult a:hover { text-decoration: underline; }
+    pre { text-align: left; background:#fafafa; padding:10px; border-radius:6px; overflow:auto; }
+  </style>
+</head>
+<body>
+  <h1>Email Verifier & Sorter by MrKarik</h1>
+  <textarea id="inputArea" placeholder="Paste emails here..."></textarea><br>
+  <input type="file" id="fileUpload" accept=".txt,.csv" onchange="uploadFile(event)">
+  <button onclick="sortEmails()">Verify & Sort</button>
+
+  <div style="text-align:center; margin:20px 0;">
+    <input type="text" id="searchEmail" placeholder="Enter email e.g. john@john.com" style="width:300px; padding:8px;">
+    <button onclick="findLogin()">Search</button>
+  </div>
+
+  <div id="searchResult" style="text-align:center; font-size:15px; margin-bottom:20px;"></div>
+  <div id="total"></div>
+  <div id="results"></div>
+
+  <script>
+    const BACKEND_BASE = "";
+    const providers = { "Gmail":["gmail.com","googlemail.com"], "Yahoo":["yahoo.com"], "Office365":["outlook.com","hotmail.com","live.com","office365.com","microsoft.com"], "Other":[] };
+    const blacklistPrefixes = ["abuse","postmaster","webmaster","noreply","no-reply","donotreply","do-not-reply"];
+    const disposableDomains = ["10minutemail.com","guerrillamail.com","tempmail.com","mailinator.com","trashmail.com"];
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    function uploadFile(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = e => document.getElementById("inputArea").value = e.target.result;
+      reader.readAsText(file);
+    }
+
+    function isValidEmail(email) {
+      if (!emailRegex.test(email)) return false;
+      const [user, domain] = email.split("@");
+      if (blacklistPrefixes.some(b => user.toLowerCase().startsWith(b))) return false;
+      if (disposableDomains.some(d => domain.toLowerCase().includes(d))) return false;
+      return true;
+    }
+
+    function sortEmails() {
+      const input = document.getElementById("inputArea").value.trim();
+      const rawEmails = input.split(/\s+/).filter(e => e.includes("@"));
+      const emails = [...new Set(rawEmails.map(e => e.toLowerCase()))];
+      const results = { "Bad Emails": [] };
+
+      emails.forEach(email => {
+        if (!isValidEmail(email)) {
+          results["Bad Emails"].push(email);
+          return;
+        }
+        const domain = email.split("@")[1];
+        let matchedProvider = "Other";
+        for (const [provider, domains] of Object.entries(providers)) {
+          if (domains.some(d => domain.endsWith(d))) {
+            matchedProvider = provider;
+            break;
+          }
+        }
+        if (!results[matchedProvider]) results[matchedProvider] = [];
+        results[matchedProvider].push(email);
+      });
+
+      let totalCount = 0;
+      let html = `<table><thead><tr><th>Provider</th><th>Counts</th><th>Download</th></tr></thead><tbody>`;
+      for (const [provider, list] of Object.entries(results)) {
+        totalCount += provider === "Bad Emails" ? 0 : list.length;
+        html += `<tr><td>${provider}</td><td>${list.length}</td><td><button onclick="downloadFolder('${provider}')">Download</button></td></tr>`;
+      }
+      html += `</tbody></table>`;
+      document.getElementById("total").innerText = "Total Valid Emails: " + totalCount;
+      document.getElementById("results").innerHTML = html;
+      window.sortedResults = results;
+    }
+
+    function downloadFolder(provider) {
+      const emails = window.sortedResults ? (window.sortedResults[provider] || []) : [];
+      const blob = new Blob([emails.join("\n")], { type: "text/plain" });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = provider.replace(/\s+/g, "_") + ".txt";
+      link.click();
+    }
+
+    async function findLogin() {
+      const email = document.getElementById("searchEmail").value.trim();
+      const resultDiv = document.getElementById("searchResult");
+      resultDiv.innerHTML = "";
+      if (!email || !email.includes("@")) {
+        resultDiv.innerHTML = "<span style='color:red;'>Enter a valid email address (e.g. john@domain.com).</span>";
+        return;
+      }
+      resultDiv.innerHTML = `<p>Checking MX & login pages for <b>${email.split("@")[1]}</b>…</p>`;
+      try {
+        const url = (BACKEND_BASE || "") + `/api/find-login?email=${encodeURIComponent(email)}`;
+        const r = await fetch(url);
+        const data = await r.json();
+        const mxBlock = (data.mxRecords && data.mxRecords.length) ? `<p>MX records:</p><pre>${data.mxRecords.join("\n")}</pre>` : `<p><i>No MX records found.</i></p>`;
+        const success = (data.successful || []).filter(s => s.ok);
+        let successHtml = success.length ? `<p><b>Likely login page(s):</b></p>` : "<p><i>No working login URLs found.</i></p>";
+        success.forEach((s, i) => successHtml += `<a href='${s.infoUrl || s.guess}' target='_blank'>${s.infoUrl || s.guess}</a>`);
+        resultDiv.innerHTML = mxBlock + successHtml;
+      } catch (err) {
+        resultDiv.innerHTML = `<span style='color:red;'>Error: ${err.message}</span>`;
+      }
+    }
+  </script>
+</body>
+</html>
